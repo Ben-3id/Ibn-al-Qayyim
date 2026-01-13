@@ -142,3 +142,24 @@ def get_resource_by_title(title):
     if row:
         return dict(row)
     return None
+
+def delete_category(name):
+    """Recursively delete a category, its subcategories, and its resources."""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # 1. Find and delete subcategories recursively
+    c.execute('SELECT name FROM categories WHERE parent_name = ?', (name,))
+    subcategories = [row[0] for row in c.fetchall()]
+    for sub in subcategories:
+        delete_category(sub)
+        
+    # 2. Delete resources in this category
+    c.execute('DELETE FROM resources WHERE category = ?', (name,))
+    
+    # 3. Delete the category itself
+    c.execute('DELETE FROM categories WHERE name = ?', (name,))
+    
+    conn.commit()
+    conn.close()
+    return True

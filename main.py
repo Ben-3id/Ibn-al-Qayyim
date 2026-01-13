@@ -60,6 +60,7 @@ def main():
     app.add_handler(CommandHandler("categories", handlers.categories_command))
     app.add_handler(CommandHandler("search", handlers.search_command))
     app.add_handler(CommandHandler("delete", handlers.delete_command))
+    app.add_handler(CommandHandler("deletecategory", handlers.delete_category_command))
     
     app.add_handler(add_link_conv)
     app.add_handler(add_file_conv)

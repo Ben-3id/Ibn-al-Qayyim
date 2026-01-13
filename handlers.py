@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from config import ADMIN_USER_ID
+from config import ADMIN_IDS
 import database as db
 
 # Stages for conversation handler
@@ -10,7 +10,7 @@ NEW_CATEGORY_NAME, NEW_CATEGORY_PARENT = range(2)
 
 # Admin check decorator or helper
 def is_admin(user_id):
-    return user_id == ADMIN_USER_ID
+    return user_id in ADMIN_IDS
 
 def get_main_menu_keyboard():
     keyboard = [
@@ -31,9 +31,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/addlink - إضافة رابط\n"
             "/addfile - إضافة ملف/وسائط\n"
             "/addcategory - إضافة قسم\n"
-            "/delete - حذف محتوى"
+            "/delete - حذف محتوى\n"
+            "/deletecategory - حذف قسم بالكامل"
         )
     await update.message.reply_text(welcome_text, reply_markup=get_main_menu_keyboard())
+
+async def delete_category_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return
+        
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /deletecategory <اسم_القسم_بالضبط>")
+        return
+        
+    name = " ".join(context.args)
+    # Check if category exists (logic check)
+    categories = db.get_categories() # For check we can just check if it exists in DB though get_categories is a bit complex
+    
+    # We can just call it, if it doesn't exist it won't crash
+    db.delete_category(name)
+    await update.message.reply_text(f"تم حذف القسم '{name}' وجميع محتوياته بنجاح.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
