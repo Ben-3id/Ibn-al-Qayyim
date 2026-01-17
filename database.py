@@ -28,6 +28,10 @@ def init_db():
             name TEXT PRIMARY KEY,
             parent_name TEXT
         );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
     ''')
     
     # Migration for existing DBs that might lack parent_name
@@ -163,3 +167,20 @@ def delete_category(name):
     conn.commit()
     conn.close()
     return True
+
+def get_setting(key, default=None):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT value FROM settings WHERE key = ?', (key,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return default
+
+def set_setting(key, value):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    conn.commit()
+    conn.close()
