@@ -35,7 +35,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel)
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
         ]
     )
 
@@ -53,7 +54,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel)
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
         ]
     )
 
@@ -66,7 +68,8 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel)
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
         ]
     )
 
@@ -78,7 +81,58 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
-            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel)
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
+    # Conversation Handler for Add Series
+    add_series_conv = ConversationHandler(
+        entry_points=[CommandHandler("addseries", handlers.add_series_start)],
+        states={
+            handlers.ADD_SERIES_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_name)],
+            handlers.ADD_SERIES_CATEGORY: [
+                CallbackQueryHandler(handlers.receive_series_category_callback, pattern="^ser_(nav|sel)_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_category_text)
+            ],
+            handlers.ADD_SERIES_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_description)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
+    # Conversation Handler for Add to Series
+    add_to_series_conv = ConversationHandler(
+        entry_points=[CommandHandler("addtoseries", handlers.add_to_series_start)],
+        states={
+            handlers.SERIES_ITEM_SERIES: [CallbackQueryHandler(handlers.receive_series_for_item, pattern="^add_to_")],
+            handlers.SERIES_ITEM_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_number)],
+            handlers.SERIES_ITEM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_title)],
+            handlers.SERIES_ITEM_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_description)],
+            handlers.SERIES_ITEM_VALUE: [MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_value)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
+    # Conversation Handler for Move Content
+    move_conv = ConversationHandler(
+        entry_points=[CommandHandler("move", handlers.move_start)],
+        states={
+            handlers.MOVE_TYPE: [CallbackQueryHandler(handlers.receive_move_type, pattern="^move_type_")],
+            handlers.MOVE_ITEM_SELECT: [CallbackQueryHandler(handlers.receive_move_item_select, pattern="^mfind_(nav|sel)_")],
+            handlers.MOVE_TARGET_CAT: [CallbackQueryHandler(handlers.receive_move_target_cat_callback, pattern="^ser_(nav|sel)_")],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
         ]
     )
 
@@ -88,12 +142,16 @@ def main():
     app.add_handler(CommandHandler("search", handlers.search_command))
     app.add_handler(CommandHandler("delete", handlers.delete_command))
     app.add_handler(CommandHandler("deletecategory", handlers.delete_category_command))
+    app.add_handler(CommandHandler("deleteseries", handlers.delete_series_command))
     app.add_handler(CommandHandler("dbdownload", handlers.dbdownload))
     
     app.add_handler(add_link_conv)
     app.add_handler(add_file_conv)
     app.add_handler(add_category_conv)
     app.add_handler(edit_help_conv)
+    app.add_handler(add_series_conv)
+    app.add_handler(add_to_series_conv)
+    app.add_handler(move_conv)
     
     # Generic Callback Query Handlers
     app.add_handler(CallbackQueryHandler(handlers.category_callback, pattern="^cat_|back_cats"))
@@ -102,6 +160,7 @@ def main():
     # Deletion confirmations
     app.add_handler(CallbackQueryHandler(handlers.confirm_delete_category, pattern="^confirm_del_cat_"))
     app.add_handler(CallbackQueryHandler(handlers.confirm_delete_resource, pattern="^confirm_del_res_"))
+    app.add_handler(CallbackQueryHandler(handlers.confirm_delete_series, pattern="^confirm_del_ser_"))
     app.add_handler(CallbackQueryHandler(handlers.cancel_delete, pattern="^cancel_del"))
 
     # Menu Text Handlers

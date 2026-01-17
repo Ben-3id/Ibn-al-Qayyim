@@ -8,6 +8,9 @@ from database import DB_NAME
 TITLE, TYPE, CATEGORY, DESCRIPTION, VALUE = range(5)
 NEW_CATEGORY_NAME, NEW_CATEGORY_PARENT = range(2)
 EDIT_HELP_TEXT = 0
+ADD_SERIES_NAME, ADD_SERIES_CATEGORY, ADD_SERIES_DESC = range(3)
+SERIES_ITEM_SERIES, SERIES_ITEM_NUMBER, SERIES_ITEM_TITLE, SERIES_ITEM_DESC, SERIES_ITEM_VALUE = range(5)
+MOVE_TYPE, MOVE_ITEM_SELECT, MOVE_TARGET_CAT = range(3)
 
 
 # Admin check decorator or helper
@@ -25,6 +28,73 @@ def get_cancel_keyboard():
     keyboard = [[KeyboardButton("❌ إلغاء")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+def get_category_selection_markup(parent_name=None):
+    """Generate markup for hierarchical category selection."""
+    categories = db.get_categories(parent=parent_name)
+    keyboard = []
+    
+    # Navigation to subcategories
+    for cat in categories:
+        keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"ser_nav_{cat}")])
+    
+    # Action buttons
+    actions = []
+    if parent_name:
+        # Up button
+        parent_info = db.get_category_info(parent_name)
+        up_callback = f"ser_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else "ser_nav_root"
+        actions.append(InlineKeyboardButton("⬅️ رجوع", callback_data=up_callback))
+        # Select current button
+        actions.append(InlineKeyboardButton("✅ اختيار هذا القسم", callback_data=f"ser_sel_{parent_name}"))
+    else:
+        # Root level
+        actions.append(InlineKeyboardButton("⏭️ بدون قسم (رئيسي)", callback_data="ser_sel_none"))
+        
+    if actions:
+        keyboard.append(actions)
+        
+    # Always add a cancel button at the bottom
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+        
+    return InlineKeyboardMarkup(keyboard)
+
+def get_move_find_markup(move_type, parent_name=None):
+    """Generate markup for finding the item to move hierarchical."""
+    categories = db.get_categories(parent=parent_name)
+    keyboard = []
+    
+    # Categories / Folders
+    for cat in categories:
+        row = [InlineKeyboardButton(f"📁 {cat}", callback_data=f"mfind_nav_{cat}")]
+        if move_type == 'cat':
+             row.append(InlineKeyboardButton("✅ انقل هذه", callback_data=f"mfind_sel_{cat}"))
+        keyboard.append(row)
+    
+    # Items
+    if move_type == 'res':
+        resources = db.get_resources_by_category(parent_name)
+        for res in resources:
+            keyboard.append([InlineKeyboardButton(f"📄 {res['title']} (نقل)", callback_data=f"mfind_sel_{res['title']}")])
+    elif move_type == 'ser':
+        series_list = db.get_series_by_category(parent_name)
+        for ser in series_list:
+            keyboard.append([InlineKeyboardButton(f"📚 {ser['name']} (نقل)", callback_data=f"mfind_sel_{ser['name']}")])
+            
+    # Action buttons
+    actions = []
+    if parent_name:
+        parent_info = db.get_category_info(parent_name)
+        up_callback = f"mfind_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else "mfind_nav_root"
+        actions.append(InlineKeyboardButton("⬅️ رجوع", callback_data=up_callback))
+        
+    if actions:
+        keyboard.append(actions)
+        
+    # Always add a cancel button at the bottom
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+        
+    return InlineKeyboardMarkup(keyboard)
+
 def is_valid_category_name(name: str):
     # Check if it looks like a command, is exactly 'command', or is the cancel button
     if name.startswith('/') or name.lower() == 'command' or name == "❌ إلغاء":
@@ -40,11 +110,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(user.id):
         welcome_text += (
             "\n\n👮 **لوحة التحكم**:\n"
+            "أوامر التعامل مع الوسائط\n"
             "/addlink - إضافة رابط\n"
             "/addfile - إضافة ملف/وسائط\n"
-            "/addcategory - إضافة قسم\n"
             "/delete - حذف محتوى\n"
+            "أوامر الاقسام\n"
+            "/addcategory - إضافة قسم\n"
             "/deletecategory - حذف قسم بالكامل\n"
+            "أوامر السلاسل \n"
+            "/addseries - إضافة سلسلة\n"
+            "/addtoseries - إضافة محتوى لسلسلة\n"
+            "/deleteseries - حذف سلسلة\n"
+            "/move - نقل (قسم/سلسلة/مادة)\n"
+            "أوامر متقدمة\n"
             "/dbdownload - تحميل قاعدة البيانات\n"
             "/edithelp - تعديل رسالة المساعدة"
         )
@@ -77,11 +155,13 @@ async def confirm_delete_category(update: Update, context: ContextTypes.DEFAULT_
     
     db.delete_category(name)
     await query.edit_message_text(f"تم حذف القسم '{name}' وجميع محتوياته بنجاح.")
+    await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
 
 async def cancel_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("تم إلغاء التراجع عن الحذف.")
+    await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
 
 async def dbdownload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -138,18 +218,35 @@ async def receive_help_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def categories_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Show Top Level Categories
+    # Show Top Level Categories, Series, and Resources
     categories = db.get_categories(parent=None)
-    if not categories:
-        await update.message.reply_text("لا توجد أقسام.")
+    series_list = db.get_series_by_category(None)
+    resources = db.get_resources_by_category(None)
+    
+    if not categories and not series_list and not resources:
+        await update.message.reply_text("لا توجد محتويات في القائمة الرئيسية.")
         return
 
     keyboard = []
+    # Categories
     for cat in categories:
         keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"cat_{cat}")])
     
+    # Series
+    for series in series_list:
+        keyboard.append([InlineKeyboardButton(f"📚 سلسلة {series['name']}", callback_data=f"cat_ser_{series['name']}")])
+    
+    # Resources
+    for res in resources:
+        icon = "📄"
+        if res['type'] == 'audio': icon = "🎵"
+        elif res['type'] == 'photo': icon = "🖼️"
+        elif res['type'] == 'video': icon = "🎥"
+        elif res['type'] == 'link': icon = "🔗"
+        keyboard.append([InlineKeyboardButton(f"{icon} {res['title']}", callback_data=f"res_{res['title']}")])
+    
     markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("اختر قسماً:", reply_markup=markup)
+    await update.message.reply_text("اختر قسماً أو مادة:", reply_markup=markup)
 
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -165,7 +262,10 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 2. Fetch Direct Resources
         resources = db.get_resources_by_category(category)
         
-        if not subcats and not resources:
+        # 3. Fetch Series in this category
+        series_list = db.get_series_by_category(category)
+        
+        if not subcats and not resources and not series_list:
             # Maybe show "Empty" but allow going back
             pass
 
@@ -175,6 +275,10 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Subcategories
         for sub in subcats:
              keyboard.append([InlineKeyboardButton(f"📁 {sub}", callback_data=f"cat_{sub}")])
+        
+        # Series in this category
+        for series in series_list:
+            keyboard.append([InlineKeyboardButton(f"📚 سلسلة {series['name']}", callback_data=f"cat_ser_{series['name']}")])
              
         # Resources
         for res in resources:
@@ -193,19 +297,131 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         markup = InlineKeyboardMarkup(keyboard)
         
         # If it was empty
-        if not subcats and not resources:
+        if not subcats and not resources and not series_list:
              text += "(فارغ)"
              
         await query.edit_message_text(text, reply_markup=markup)
         
     elif data == "back_cats":
-        # Re-fetch root categories
+        # Re-fetch root content
         categories = db.get_categories(parent=None)
+        series_list = db.get_series_by_category(None)
+        resources = db.get_resources_by_category(None)
+        
         keyboard = []
         for cat in categories:
             keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"cat_{cat}")])
+        for series in series_list:
+            keyboard.append([InlineKeyboardButton(f"📚 سلسلة {series['name']}", callback_data=f"cat_ser_{series['name']}")])
+        for res in resources:
+            icon = "📄"
+            if res['type'] == 'audio': icon = "🎵"
+            elif res['type'] == 'photo': icon = "🖼️"
+            elif res['type'] == 'video': icon = "🎥"
+            elif res['type'] == 'link': icon = "🔗"
+            keyboard.append([InlineKeyboardButton(f"{icon} {res['title']}", callback_data=f"res_{res['title']}")])
+            
         markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("اختر قسماً:", reply_markup=markup)
+        await query.edit_message_text("اختر قسماً أو مادة:", reply_markup=markup)
+    
+    elif data.startswith("cat_ser_"):
+        # User clicked on a series from category view
+        series_name = data[8:]  # Remove "cat_ser_" prefix
+        items = db.get_series_items(series_name)
+        
+        if not items:
+            await query.edit_message_text(f"السلسلة '{series_name}' فارغة.")
+            return
+        
+        text = f"📚 السلسلة: {series_name}\n\n"
+        keyboard = []
+        
+        for item in items:
+            icon = "📄"
+            if item['type'] == 'audio': icon = "🎵"
+            elif item['type'] == 'photo': icon = "🖼️"
+            elif item['type'] == 'video': icon = "🎥"
+            elif item['type'] == 'link': icon = "🔗"
+            
+            # Make each item clickable
+            button_text = f"{item['item_number']}. {icon} {item['title']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"ser_item_{series_name}_{item['item_number']}")])
+        
+        keyboard.append([InlineKeyboardButton("<< رجوع", callback_data="back_cats")])
+        markup = InlineKeyboardMarkup(keyboard)
+        
+        text += "اختر مادة لعرضها:"
+        await query.edit_message_text(text, reply_markup=markup)
+    
+    elif data.startswith("ser_item_"):
+        # User clicked on a specific series item from category view
+        # Format: ser_item_{series_name}_{item_number}
+        parts = data[9:].rsplit('_', 1)  # Split from the right, once
+        if len(parts) != 2:
+            await query.message.reply_text("خطأ في البيانات.")
+            return
+        
+        series_name = parts[0]
+        try:
+            item_number = int(parts[1])
+        except ValueError:
+            await query.message.reply_text("رقم المادة غير صحيح.")
+            return
+        
+        # Get the specific item
+        items = db.get_series_items(series_name)
+        item = None
+        for i in items:
+            if i['item_number'] == item_number:
+                item = i
+                break
+        
+        if not item:
+            await query.message.reply_text("المادة غير موجودة.")
+            return
+        
+        # Send the item using the helper function
+        await send_series_item_direct(query, context, item)
+
+async def send_series_item_direct(query, context, item):
+    """Helper function to send a series item directly"""
+    chat_id = query.message.chat_id
+    
+    if item.get('message_id') and item.get('source_chat_id'):
+        try:
+            await context.bot.forward_message(
+                chat_id=chat_id,
+                from_chat_id=item['source_chat_id'],
+                message_id=item['message_id']
+            )
+            if item.get('description') or item.get('title'):
+                caption = f"**{item['title']}**\n{item['description']}"
+                await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='Markdown')
+            return
+        except Exception as e:
+            print(f"Forward failed: {e}")
+
+    # Fallback / Legacy behavior
+    response_text = (
+        f"**{item['title']}**\n"
+        f"النوع: {item['type']}\n"
+        f"الوصف: {item['description']}\n"
+    )
+    
+    try:
+        if item['type'] == 'photo':
+            await context.bot.send_photo(chat_id=chat_id, photo=item['content_value'], caption=response_text, parse_mode='Markdown')
+        elif item['type'] == 'audio':
+            await context.bot.send_audio(chat_id=chat_id, audio=item['content_value'], caption=response_text, parse_mode='Markdown')
+        elif item['type'] == 'video':
+             await context.bot.send_video(chat_id=chat_id, video=item['content_value'], caption=response_text, parse_mode='Markdown')
+        elif item['type'] == 'file':
+            await context.bot.send_document(chat_id=chat_id, document=item['content_value'], caption=response_text, parse_mode='Markdown')
+        else:
+            response_text += f"\nالرابط: {item['content_value']}"
+            await context.bot.send_message(chat_id=chat_id, text=response_text, parse_mode='Markdown')
+    except Exception as e:
+         print(f"Error sending item: {e}")
 
 async def resource_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -315,8 +531,8 @@ async def confirm_delete_resource(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(f"تم حذف '{title}'.")
     else:
         await query.edit_message_text(f"فشل حذف '{title}'.")
-
-        await update.message.reply_text(f"لم يتم العثور على '{title}'.")
+    
+    await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
 
 # --- Conversation Handler for Adding Category ---
 
@@ -488,5 +704,362 @@ async def save_resource(update, context):
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("تم إلغاء العملية.", reply_markup=get_main_menu_keyboard())
+    msg = update.message if update.message else update.callback_query.message
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("تم إلغاء العملية.")
+        await msg.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+    else:
+        await msg.reply_text("تم إلغاء العملية.", reply_markup=get_main_menu_keyboard())
     return ConversationHandler.END
+
+# --- Admin: Add Series ---
+
+async def add_series_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return ConversationHandler.END
+    
+    await update.message.reply_text("أدخل اسم السلسلة الجديدة:", reply_markup=get_cancel_keyboard())
+    return ADD_SERIES_NAME
+
+async def receive_series_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text
+    if not is_valid_category_name(name):
+        await update.message.reply_text("اسم السلسلة غير صالح. يرجى عدم البدء بـ '/' أو استخدام كلمة 'command'.", reply_markup=get_cancel_keyboard())
+        return ADD_SERIES_NAME
+    
+    context.user_data['series_name'] = name
+    
+    # Start hierarchical selection from root
+    markup = get_category_selection_markup(None)
+    await update.message.reply_text("اختر قسماً للسلسلة (أو تنقل بين الأقسام):", reply_markup=markup)
+    return ADD_SERIES_CATEGORY
+
+async def receive_series_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("ser_nav_"):
+        # Navigation
+        category_name = data.replace("ser_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = "اختر قسماً للسلسلة (أو تنقل بين الأقسام):"
+        else:
+            text = f"القسم الحالي: {category_name}\nيمكنك تنزيل السلسلة هنا أو الدخول لقسم فرعي:"
+            
+        markup = get_category_selection_markup(category_name)
+        await query.edit_message_text(text, reply_markup=markup)
+        return ADD_SERIES_CATEGORY
+        
+    elif data.startswith("ser_sel_"):
+        # Selection
+        category_data = data.replace("ser_sel_", "")
+        if category_data == "none":
+            context.user_data['series_category'] = None
+            await query.edit_message_text("تم اختيار: بدون قسم (رئيسي).")
+        else:
+            context.user_data['series_category'] = category_data
+            await query.edit_message_text(f"تم اختيار القسم: {category_data}")
+        
+        await query.message.reply_text("أدخل وصف السلسلة (أو اكتب 'لا' للتخطي):", reply_markup=get_cancel_keyboard())
+        return ADD_SERIES_DESC
+
+async def receive_series_category_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    category = update.message.text
+    if category.lower() in ['لا', 'no', 'none']:
+        context.user_data['series_category'] = None
+    else:
+        context.user_data['series_category'] = category
+    
+    await update.message.reply_text("أدخل وصف السلسلة (أو اكتب 'لا' للتخطي):", reply_markup=get_cancel_keyboard())
+    return ADD_SERIES_DESC
+
+async def receive_series_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    description = update.message.text
+    if description.lower() in ['لا', 'no', 'none']:
+        description = None
+    
+    name = context.user_data['series_name']
+    category = context.user_data.get('series_category')
+    
+    if db.add_series(name, description, category):
+        category_text = f" في القسم '{category}'" if category else ""
+        await update.message.reply_text(f"تم إضافة سلسلة '{name}'{category_text} بنجاح.", reply_markup=get_main_menu_keyboard())
+    else:
+        await update.message.reply_text(f"فشل إضافة السلسلة. ربما الاسم موجود بالفعل.", reply_markup=get_main_menu_keyboard())
+    
+    return ConversationHandler.END
+
+# --- Admin: Add to Series ---
+
+async def add_to_series_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return ConversationHandler.END
+    
+    series_list = db.get_all_series()
+    if not series_list:
+        await update.message.reply_text("لا توجد سلاسل. يرجى إضافة سلسلة أولاً باستخدام /addseries")
+        return ConversationHandler.END
+    
+    keyboard = []
+    for series in series_list:
+        keyboard.append([InlineKeyboardButton(f"📚 {series['name']}", callback_data=f"add_to_{series['name']}")])
+    
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+    
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("اختر السلسلة لإضافة محتوى إليها:", reply_markup=markup)
+    return SERIES_ITEM_SERIES
+
+async def receive_series_for_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    series_name = query.data.replace("add_to_", "")
+    context.user_data['target_series'] = series_name
+    
+    await query.edit_message_text(f"تم اختيار السلسلة: {series_name}")
+    await query.message.reply_text("أدخل رقم المادة في السلسلة (مثال: 1, 2, 3...):", reply_markup=get_cancel_keyboard())
+    return SERIES_ITEM_NUMBER
+
+async def receive_item_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        item_number = int(update.message.text)
+        if item_number < 1:
+            raise ValueError
+        context.user_data['item_number'] = item_number
+        await update.message.reply_text("أدخل عنوان المادة:")
+        return SERIES_ITEM_TITLE
+    except ValueError:
+        await update.message.reply_text("يرجى إدخال رقم صحيح أكبر من 0:")
+        return SERIES_ITEM_NUMBER
+
+async def receive_item_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['item_title'] = update.message.text
+    await update.message.reply_text("أدخل وصف المادة:")
+    return SERIES_ITEM_DESC
+
+async def receive_item_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['item_description'] = update.message.text
+    await update.message.reply_text("قم برفع الملف أو أرسل الرابط:")
+    return SERIES_ITEM_VALUE
+
+async def receive_item_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Determine if it's a file or link
+    file_id = None
+    file_type = 'file'
+    message_id = None
+    source_chat_id = None
+    content_value = None
+    
+    msg = update.message
+    
+    # Check for text (link)
+    if msg.text:
+        content_value = msg.text
+        file_type = 'link'
+    # Check for media
+    elif msg.audio:
+        file_id = msg.audio.file_id
+        file_type = 'audio'
+        message_id = msg.message_id
+        source_chat_id = msg.chat_id
+        content_value = file_id
+    elif msg.voice:
+        file_id = msg.voice.file_id
+        file_type = 'audio'
+        message_id = msg.message_id
+        source_chat_id = msg.chat_id
+        content_value = file_id
+    elif msg.photo:
+        file_id = msg.photo[-1].file_id
+        file_type = 'photo'
+        message_id = msg.message_id
+        source_chat_id = msg.chat_id
+        content_value = file_id
+    elif msg.video:
+        file_id = msg.video.file_id
+        file_type = 'video'
+        message_id = msg.message_id
+        source_chat_id = msg.chat_id
+        content_value = file_id
+    elif msg.document:
+        file_id = msg.document.file_id
+        file_type = 'file'
+        message_id = msg.message_id
+        source_chat_id = msg.chat_id
+        content_value = file_id
+    else:
+        await update.message.reply_text("الرجاء رفع ملف/صورة/صوت صالح أو إرسال رابط.")
+        return SERIES_ITEM_VALUE
+    
+    # Save to database
+    series_name = context.user_data['target_series']
+    item_number = context.user_data['item_number']
+    title = context.user_data['item_title']
+    description = context.user_data['item_description']
+    
+    success = db.add_series_item(
+        series_name, item_number, title, file_type, 
+        description, content_value, message_id, source_chat_id
+    )
+    
+    if success:
+        await update.message.reply_text(
+            f"تم إضافة المادة #{item_number} إلى السلسلة '{series_name}' بنجاح.", 
+            reply_markup=get_main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            f"فشل إضافة المادة. ربما الرقم {item_number} موجود بالفعل في هذه السلسلة.", 
+            reply_markup=get_main_menu_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+# --- Admin: Delete Series ---
+
+async def delete_series_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return
+        
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /deleteseries <اسم_السلسلة_بالضبط>")
+        return
+        
+    name = " ".join(context.args)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_del_ser_{name}")],
+        [InlineKeyboardButton("❌ تراجع", callback_data="cancel_del")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(f"هل أنت متأكد من حذف السلسلة '{name}' وجميع محتوياتها؟", reply_markup=markup)
+
+async def confirm_delete_series(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    name = query.data.replace("confirm_del_ser_", "")
+    
+    if db.delete_series(name):
+        await query.edit_message_text(f"تم حذف السلسلة '{name}' وجميع محتوياتها بنجاح.")
+    else:
+        await query.edit_message_text(f"فشل حذف السلسلة '{name}'.")
+    
+    await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+
+# --- Admin: Move Content ---
+
+async def move_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return ConversationHandler.END
+    
+    keyboard = [
+        [InlineKeyboardButton("📄 مادة (Resource)", callback_data="move_type_res")],
+        [InlineKeyboardButton("📚 سلسلة (Series)", callback_data="move_type_ser")],
+        [InlineKeyboardButton("📁 قسم (Category)", callback_data="move_type_cat")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("ماذا تريد أن تنقل؟", reply_markup=markup)
+    return MOVE_TYPE
+
+async def receive_move_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    move_type = query.data.replace("move_type_", "")
+    context.user_data['move_type'] = move_type
+    
+    markup = get_move_find_markup(move_type, None)
+    await query.edit_message_text("تصفح الاقسام لاختيار العنصر الذي تريد نقله:", reply_markup=markup)
+    return MOVE_ITEM_SELECT
+
+async def receive_move_item_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    move_type = context.user_data['move_type']
+    
+    if data.startswith("mfind_nav_"):
+        # Navigation
+        category_name = data.replace("mfind_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = "تصفح الاقسام لاختيار العنصر:"
+        else:
+            text = f"القسم الحالي: {category_name}\nاختر العنصر المراد نقله أو ادخل لقسم فرعي:"
+            
+        markup = get_move_find_markup(move_type, category_name)
+        await query.edit_message_text(text, reply_markup=markup)
+        return MOVE_ITEM_SELECT
+        
+    elif data.startswith("mfind_sel_"):
+        # Selection
+        item_name = data.replace("mfind_sel_", "")
+        context.user_data['move_item_name'] = item_name
+        
+        # Show target category selection
+        markup = get_category_selection_markup(None)
+        await query.edit_message_text(f"اختر القسم الجديد لـ '{item_name}':", reply_markup=markup)
+        return MOVE_TARGET_CAT
+
+async def receive_move_target_cat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("ser_nav_"):
+        # Navigation
+        category_name = data.replace("ser_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = "اختر القسم الجديد (أو تنقل بين الأقسام):"
+        else:
+            text = f"القسم الحالي: {category_name}\nيمكنك النقل هنا أو الدخول لقسم فرعي:"
+            
+        markup = get_category_selection_markup(category_name)
+        await query.edit_message_text(text, reply_markup=markup)
+        return MOVE_TARGET_CAT
+        
+    elif data.startswith("ser_sel_"):
+        # Selection
+        target_cat = data.replace("ser_sel_", "")
+        if target_cat == "none":
+            target_cat = None
+        
+        move_type = context.user_data['move_type']
+        item_name = context.user_data['move_item_name']
+        
+        success = False
+        if move_type == 'res':
+            # For resources, 'category' is NOT NULL
+            # If target_cat is None (Root), we use "None" to represent root
+            new_cat_val = target_cat if target_cat else "None"
+            success = db.update_resource_category(item_name, new_cat_val)
+        elif move_type == 'ser':
+            success = db.update_series_category(item_name, target_cat)
+        elif move_type == 'cat':
+            if item_name == target_cat:
+                 await query.edit_message_text("لا يمكن نقل القسم إلى نفسه!")
+                 return ConversationHandler.END
+            success = db.update_category_parent(item_name, target_cat)
+            
+        if success:
+            cat_text = target_cat if target_cat else "الرئيسي"
+            await query.edit_message_text(f"تم نقل '{item_name}' إلى '{cat_text}' بنجاح.")
+            await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+        else:
+            await query.edit_message_text(f"فشل نقل '{item_name}'.")
+            await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+            
+        return ConversationHandler.END
