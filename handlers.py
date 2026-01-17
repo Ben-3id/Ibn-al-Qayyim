@@ -3,6 +3,7 @@ from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, Mess
 from config import ADMIN_IDS
 import database as db
 from database import DB_NAME
+import html
 
 # Stages for conversation handler
 TITLE, TYPE, CATEGORY, DESCRIPTION, VALUE = range(5)
@@ -189,15 +190,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   📂 **الاقسام**: تصفح مجلدات المحتوى.\n"
         "      ↳ **أقسام فرعية**: مجلدات داخل مجلدات.\n"
         "      ↳ **الموارد**: ملفات، صوتيات، صور، روابط.\n\n"
-        "**2. البحث عن المحتوى**:\n"
-        "   • تصفح عبر زر 'الاقسام'.\n"
-        "   • استخدم `/search <كلمة>` للبحث عن عناصر محددة.\n\n"
-        "**3. المسؤول** (إذا كنت تمتلك الصلاحية):\n"
-        "   • إضافة محتوى باستخدام أوامر /add.\n"
-        "   • تنظيم الأقسام باستخدام /addcategory."
     )
     text = db.get_setting("help_text", default_text)
-    await update.message.reply_text(text, parse_mode='Markdown', reply_markup=get_main_menu_keyboard())
+    await update.message.reply_text(text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
 
 async def edit_help_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -219,6 +214,9 @@ async def receive_help_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def categories_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show Top Level Categories, Series, and Resources
+    user = update.effective_user
+    print(f"Categories command triggered by user {user.id} ({user.username})")
+    
     categories = db.get_categories(parent=None)
     series_list = db.get_series_by_category(None)
     resources = db.get_resources_by_category(None)
@@ -253,7 +251,36 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     data = query.data
-    if data.startswith("cat_"):
+    if data.startswith("cat_ser_"):
+        # User clicked on a series from category view
+        series_name = data[8:]  # Remove "cat_ser_" prefix
+        items = db.get_series_items(series_name)
+        
+        if not items:
+            await query.edit_message_text(f"السلسلة '{html.escape(series_name)}' فارغة.")
+            return
+        
+        text = f"📚 السلسلة: {html.escape(series_name)}\n\n"
+        keyboard = []
+        
+        for item in items:
+            icon = "📄"
+            if item['type'] == 'audio': icon = "🎵"
+            elif item['type'] == 'photo': icon = "🖼️"
+            elif item['type'] == 'video': icon = "🎥"
+            elif item['type'] == 'link': icon = "🔗"
+            
+            # Make each item clickable
+            button_text = f"{item['item_number']}. {icon} {item['title']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"ser_item_{series_name}_{item['item_number']}")])
+        
+        keyboard.append([InlineKeyboardButton("<< رجوع", callback_data="back_cats")])
+        markup = InlineKeyboardMarkup(keyboard)
+        
+        text += "اختر مادة لعرضها:"
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
+
+    elif data.startswith("cat_"):
         category = data[4:]
         
         # 1. Fetch Subcategories
@@ -269,7 +296,7 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Maybe show "Empty" but allow going back
             pass
 
-        text = f"القسم: {category}\n"
+        text = f"القسم: {html.escape(category)}\n"
         keyboard = []
         
         # Subcategories
@@ -300,8 +327,8 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not subcats and not resources and not series_list:
              text += "(فارغ)"
              
-        await query.edit_message_text(text, reply_markup=markup)
-        
+        await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
+    
     elif data == "back_cats":
         # Re-fetch root content
         categories = db.get_categories(parent=None)
@@ -322,36 +349,7 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"{icon} {res['title']}", callback_data=f"res_{res['title']}")])
             
         markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("اختر قسماً أو مادة:", reply_markup=markup)
-    
-    elif data.startswith("cat_ser_"):
-        # User clicked on a series from category view
-        series_name = data[8:]  # Remove "cat_ser_" prefix
-        items = db.get_series_items(series_name)
-        
-        if not items:
-            await query.edit_message_text(f"السلسلة '{series_name}' فارغة.")
-            return
-        
-        text = f"📚 السلسلة: {series_name}\n\n"
-        keyboard = []
-        
-        for item in items:
-            icon = "📄"
-            if item['type'] == 'audio': icon = "🎵"
-            elif item['type'] == 'photo': icon = "🖼️"
-            elif item['type'] == 'video': icon = "🎥"
-            elif item['type'] == 'link': icon = "🔗"
-            
-            # Make each item clickable
-            button_text = f"{item['item_number']}. {icon} {item['title']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"ser_item_{series_name}_{item['item_number']}")])
-        
-        keyboard.append([InlineKeyboardButton("<< رجوع", callback_data="back_cats")])
-        markup = InlineKeyboardMarkup(keyboard)
-        
-        text += "اختر مادة لعرضها:"
-        await query.edit_message_text(text, reply_markup=markup)
+        await query.edit_message_text("اختر قسماً أو مادة:", reply_markup=markup, parse_mode='HTML')
     
     elif data.startswith("ser_item_"):
         # User clicked on a specific series item from category view
@@ -395,31 +393,31 @@ async def send_series_item_direct(query, context, item):
                 message_id=item['message_id']
             )
             if item.get('description') or item.get('title'):
-                caption = f"**{item['title']}**\n{item['description']}"
-                await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='Markdown')
+                caption = f"<b>{html.escape(item['title'])}</b>\n{html.escape(item['description'])}"
+                await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
             return
         except Exception as e:
             print(f"Forward failed: {e}")
 
     # Fallback / Legacy behavior
     response_text = (
-        f"**{item['title']}**\n"
+        f"<b>{html.escape(item['title'])}</b>\n"
         f"النوع: {item['type']}\n"
-        f"الوصف: {item['description']}\n"
+        f"الوصف: {html.escape(item['description'])}\n"
     )
     
     try:
         if item['type'] == 'photo':
-            await context.bot.send_photo(chat_id=chat_id, photo=item['content_value'], caption=response_text, parse_mode='Markdown')
+            await context.bot.send_photo(chat_id=chat_id, photo=item['content_value'], caption=response_text, parse_mode='HTML')
         elif item['type'] == 'audio':
-            await context.bot.send_audio(chat_id=chat_id, audio=item['content_value'], caption=response_text, parse_mode='Markdown')
+            await context.bot.send_audio(chat_id=chat_id, audio=item['content_value'], caption=response_text, parse_mode='HTML')
         elif item['type'] == 'video':
-             await context.bot.send_video(chat_id=chat_id, video=item['content_value'], caption=response_text, parse_mode='Markdown')
+             await context.bot.send_video(chat_id=chat_id, video=item['content_value'], caption=response_text, parse_mode='HTML')
         elif item['type'] == 'file':
-            await context.bot.send_document(chat_id=chat_id, document=item['content_value'], caption=response_text, parse_mode='Markdown')
+            await context.bot.send_document(chat_id=chat_id, document=item['content_value'], caption=response_text, parse_mode='HTML')
         else:
             response_text += f"\nالرابط: {item['content_value']}"
-            await context.bot.send_message(chat_id=chat_id, text=response_text, parse_mode='Markdown')
+            await context.bot.send_message(chat_id=chat_id, text=response_text, parse_mode='HTML')
     except Exception as e:
          print(f"Error sending item: {e}")
 
@@ -449,8 +447,8 @@ async def resource_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # User asked for "forward it", so we stick to forward_message.
                 # We can send the description below it.
                 if resource.get('description') or resource.get('title'):
-                     caption = f"**{resource['title']}**\n{resource['description']}"
-                     await query.message.reply_text(caption, parse_mode='Markdown')
+                     caption = f"<b>{html.escape(resource['title'])}</b>\n{html.escape(resource['description'])}"
+                     await query.message.reply_text(caption, parse_mode='HTML')
                 return
             except Exception as e:
                 # If forwarding fails (e.g. original message deleted), try fallback or report error
@@ -459,23 +457,23 @@ async def resource_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Fallback / Legacy behavior
         response_text = (
-            f"**{resource['title']}**\n"
+            f"<b>{html.escape(resource['title'])}</b>\n"
             f"النوع: {resource['type']}\n"
-            f"الوصف: {resource['description']}\n"
+            f"الوصف: {html.escape(resource['description'])}\n"
         )
         
         try:
             if resource['type'] == 'photo':
-                await query.message.reply_photo(photo=resource['content_value'], caption=response_text, parse_mode='Markdown')
+                await query.message.reply_photo(photo=resource['content_value'], caption=response_text, parse_mode='HTML')
             elif resource['type'] == 'audio':
-                await query.message.reply_audio(audio=resource['content_value'], caption=response_text, parse_mode='Markdown')
+                await query.message.reply_audio(audio=resource['content_value'], caption=response_text, parse_mode='HTML')
             elif resource['type'] == 'video':
-                 await query.message.reply_video(video=resource['content_value'], caption=response_text, parse_mode='Markdown')
+                 await query.message.reply_video(video=resource['content_value'], caption=response_text, parse_mode='HTML')
             elif resource['type'] == 'file':
-                await query.message.reply_document(document=resource['content_value'], caption=response_text, parse_mode='Markdown')
+                await query.message.reply_document(document=resource['content_value'], caption=response_text, parse_mode='HTML')
             else:
                 response_text += f"\nالرابط: {resource['content_value']}"
-                await query.message.reply_text(response_text, parse_mode='Markdown')
+                await query.message.reply_text(response_text, parse_mode='HTML')
         except Exception as e:
              await query.message.reply_text(f"خطأ في جلب المحتوى: {e}")
 
