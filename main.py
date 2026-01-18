@@ -28,9 +28,12 @@ def main():
             handlers.TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_title)],
             handlers.CATEGORY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_category),
-                CallbackQueryHandler(handlers.receive_category_callback, pattern="^sel_cat_")
+                CallbackQueryHandler(handlers.receive_category_callback, pattern="^rsel_(nav|sel)_")
             ],
-            handlers.DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_description)],
+            handlers.DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_description),
+                CallbackQueryHandler(handlers.skip_description_callback, pattern="^skip_desc$")
+            ],
             handlers.VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_value_link)],
         },
         fallbacks=[
@@ -47,9 +50,12 @@ def main():
             handlers.TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_title)],
             handlers.CATEGORY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_category),
-                CallbackQueryHandler(handlers.receive_category_callback, pattern="^sel_cat_")
+                CallbackQueryHandler(handlers.receive_category_callback, pattern="^rsel_(nav|sel)_")
             ],
-            handlers.DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_description)],
+            handlers.DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_description),
+                CallbackQueryHandler(handlers.skip_description_callback, pattern="^skip_desc$")
+            ],
             handlers.VALUE: [MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_value_file)],
         },
         fallbacks=[
@@ -98,7 +104,10 @@ def main():
                 CallbackQueryHandler(handlers.receive_series_category_callback, pattern="^ser_(nav|sel)_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_category_text)
             ],
-            handlers.ADD_SERIES_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_description)],
+            handlers.ADD_SERIES_DESC: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_series_description),
+                CallbackQueryHandler(handlers.skip_ser_description_callback, pattern="^skip_ser_desc$")
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),
@@ -114,7 +123,10 @@ def main():
             handlers.SERIES_ITEM_SERIES: [CallbackQueryHandler(handlers.receive_series_for_item, pattern="^add_to_")],
             handlers.SERIES_ITEM_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_number)],
             handlers.SERIES_ITEM_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_title)],
-            handlers.SERIES_ITEM_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_description)],
+            handlers.SERIES_ITEM_DESC: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_description),
+                CallbackQueryHandler(handlers.skip_item_description_callback, pattern="^skip_item_desc$")
+            ],
             handlers.SERIES_ITEM_VALUE: [MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_item_value)],
         },
         fallbacks=[
@@ -161,7 +173,6 @@ def main():
     app.add_handler(CommandHandler("delete", handlers.delete_command))
     app.add_handler(CommandHandler("deletecategory", handlers.delete_category_command))
     app.add_handler(CommandHandler("deleteseries", handlers.delete_series_command))
-    app.add_handler(CommandHandler("dbdownload", handlers.dbdownload))
     
     app.add_handler(add_link_conv)
     app.add_handler(add_file_conv)

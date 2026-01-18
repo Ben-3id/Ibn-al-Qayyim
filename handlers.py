@@ -2,7 +2,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from config import ADMIN_IDS
 import database as db
-from database import DB_NAME
 import html
 
 # Stages for conversation handler
@@ -30,27 +29,27 @@ def get_cancel_keyboard():
     keyboard = [[KeyboardButton("❌ إلغاء")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_category_selection_markup(parent_name=None):
+def get_category_selection_markup(parent_name=None, prefix="ser"):
     """Generate markup for hierarchical category selection."""
     categories = db.get_categories(parent=parent_name)
     keyboard = []
     
     # Navigation to subcategories
     for cat in categories:
-        keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"ser_nav_{cat}")])
+        keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"{prefix}_nav_{cat}")])
     
     # Action buttons
     actions = []
     if parent_name:
         # Up button
         parent_info = db.get_category_info(parent_name)
-        up_callback = f"ser_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else "ser_nav_root"
+        up_callback = f"{prefix}_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else f"{prefix}_nav_root"
         actions.append(InlineKeyboardButton("⬅️ رجوع", callback_data=up_callback))
         # Select current button
-        actions.append(InlineKeyboardButton("✅ اختيار هذا القسم", callback_data=f"ser_sel_{parent_name}"))
+        actions.append(InlineKeyboardButton("✅ اختيار هذا القسم", callback_data=f"{prefix}_sel_{parent_name}"))
     else:
         # Root level
-        actions.append(InlineKeyboardButton("⏭️ بدون قسم (رئيسي)", callback_data="ser_sel_none"))
+        actions.append(InlineKeyboardButton("⏭️ بدون قسم (رئيسي)", callback_data=f"{prefix}_sel_none"))
         
     if actions:
         keyboard.append(actions)
@@ -177,7 +176,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/addtoseries - إضافة محتوى لسلسلة\n"
             "/deleteseries - حذف سلسلة\n"
             "أوامر متقدمة\n"
-            "/dbdownload - تحميل قاعدة البيانات\n"
             "/edithelp - تعديل رسالة المساعدة"
         )
     await update.message.reply_text(welcome_text, reply_markup=get_main_menu_keyboard())
@@ -217,23 +215,6 @@ async def cancel_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("تم إلغاء التراجع عن الحذف.")
     await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
 
-async def dbdownload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("غير مصرح.")
-        return
-
-    try:
-        import os
-        if os.path.exists(DB_NAME):
-            await update.message.reply_document(
-                document=open(DB_NAME, 'rb'),
-                filename=os.path.basename(DB_NAME),
-                caption="نسخة احتياطية من قاعدة البيانات"
-            )
-        else:
-            await update.message.reply_text("ملف قاعدة البيانات غير موجود.")
-    except Exception as e:
-        await update.message.reply_text(f"خطأ أثناء تحميل قاعدة البيانات: {e}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     default_text = (
@@ -440,17 +421,18 @@ async def send_series_item_direct(query, context, item):
     
     if item.get('message_id') and item.get('source_chat_id'):
         try:
-            await context.bot.forward_message(
+            # Use copy_message to avoid the "Forwarded from" tag
+            await context.bot.copy_message(
                 chat_id=chat_id,
                 from_chat_id=item['source_chat_id'],
                 message_id=item['message_id']
             )
-            if item.get('description') or item.get('title'):
-                caption = f"<b>{html.escape(item['title'])}</b>\n{html.escape(item['description'])}"
-                await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
+            # We don't need a separate caption if copy_message is used, 
+            # but user said "dont show a mesage forward" which might mean they want the clean copy.
+            # If there was a custom description, we can send it or use caption in copy_message.
             return
         except Exception as e:
-            print(f"Forward failed: {e}")
+            print(f"Copy failed: {e}")
 
     # Fallback / Legacy behavior
     response_text = (
@@ -488,25 +470,15 @@ async def resource_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         if resource.get('message_id') and resource.get('source_chat_id'):
             try:
-                # Use forwarding as requested
-                await context.bot.forward_message(
+                # Use copy_message to avoid the "Forwarded from" tag
+                await context.bot.copy_message(
                     chat_id=query.message.chat_id,
                     from_chat_id=resource['source_chat_id'],
                     message_id=resource['message_id']
                 )
-                # Optionally send the description/caption as a separate message if it was a forward, 
-                # because we can't edit the caption of a forwarded message easily to include our custom description
-                # UNLESS we use copy_message (which is different from forward).
-                # User asked for "forward it", so we stick to forward_message.
-                # We can send the description below it.
-                if resource.get('description') or resource.get('title'):
-                     caption = f"<b>{html.escape(resource['title'])}</b>\n{html.escape(resource['description'])}"
-                     await query.message.reply_text(caption, parse_mode='HTML')
                 return
             except Exception as e:
-                # If forwarding fails (e.g. original message deleted), try fallback or report error
-                print(f"Forward failed: {e}")
-                # Fallback to copy/send by ID if possible (below)
+                print(f"Copy failed: {e}")
 
         # Fallback / Legacy behavior
         response_text = (
@@ -717,34 +689,44 @@ async def receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     context.user_data['title'] = title
     
-    # Show existing categories as inline buttons
-    categories = db.get_categories()
-    
-    if not categories:
-        await update.message.reply_text("لا توجد أقسام حالياً. يرجى إدخال اسم القسم يدوياً:")
-        return CATEGORY
-
-    keyboard = []
-    for cat in categories:
-        keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"sel_cat_{cat}")])
-    
-    # Also allow manual entry or "New Category" if we want, but for now just list them.
-    # The user can still type a new one if the MessageHandler is still there.
-    
-    markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("اختر قسماً من القائمة أو اكتب اسماً جديداً:", reply_markup=markup)
+    # Show hierarchical selection from root
+    markup = get_category_selection_markup(None, prefix="rsel")
+    await update.message.reply_text("اختر قسماً للمحتوى (أو تنقل بين الأقسام):", reply_markup=markup)
     return CATEGORY
 
 async def receive_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    category = query.data.replace("sel_cat_", "")
-    context.user_data['category'] = category
+    data = query.data
     
-    await query.edit_message_text(f"تم اختيار القسم: {category}")
-    await query.message.reply_text("أدخل الوصف:", reply_markup=get_cancel_keyboard())
-    return DESCRIPTION
+    if data.startswith("rsel_nav_"):
+        # Navigation
+        category_name = data.replace("rsel_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = "اختر قسماً للمحتوى (أو تنقل بين الأقسام):"
+        else:
+            text = f"القسم الحالي: {category_name}\nيمكنك وضع المحتوى هنا أو الدخول لقسم فرعي:"
+            
+        markup = get_category_selection_markup(category_name, prefix="rsel")
+        await query.edit_message_text(text, reply_markup=markup)
+        return CATEGORY
+        
+    elif data.startswith("rsel_sel_"):
+        # Selection
+        category = data.replace("rsel_sel_", "")
+        if category == "none":
+            context.user_data['category'] = None
+            await query.edit_message_text("تم اختيار: بدون قسم (رئيسي).")
+        else:
+            context.user_data['category'] = category
+            await query.edit_message_text(f"تم اختيار القسم: {category}")
+        
+        keyboard = [[InlineKeyboardButton("⏭️ تخطي (بدون وصف)", callback_data="skip_desc")]]
+        markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("أدخل الوصف (يمكنك الضغط على زر التخطي):", reply_markup=markup)
+        return DESCRIPTION
 
 async def receive_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = update.message.text
@@ -753,7 +735,10 @@ async def receive_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
          return CATEGORY
          
     context.user_data['category'] = category
-    await update.message.reply_text("أدخل الوصف:", reply_markup=get_cancel_keyboard())
+    context.user_data['category'] = category
+    keyboard = [[InlineKeyboardButton("⏭️ تخطي (بدون وصف)", callback_data="skip_desc")]]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("أدخل الوصف (يمكنك الضغط على زر التخطي):", reply_markup=markup)
     return DESCRIPTION
 
 async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -762,6 +747,16 @@ async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("أدخل الرابط (URL):")
     else:
         await update.message.reply_text("قم برفع الملف الآن:")
+    return VALUE
+
+async def skip_description_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['description'] = ""
+    if context.user_data['type'] == 'link':
+        await query.edit_message_text("تم تخطي الوصف. أدخل الرابط (URL):")
+    else:
+        await query.edit_message_text("تم تخطي الوصف. قم برفع الملف الآن:")
     return VALUE
 
 async def receive_value_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -879,7 +874,9 @@ async def receive_series_category_callback(update: Update, context: ContextTypes
             context.user_data['series_category'] = category_data
             await query.edit_message_text(f"تم اختيار القسم: {category_data}")
         
-        await query.message.reply_text("أدخل وصف السلسلة (أو اكتب 'لا' للتخطي):", reply_markup=get_cancel_keyboard())
+        keyboard = [[InlineKeyboardButton("⏭️ تخطي (بدون وصف)", callback_data="skip_ser_desc")]]
+        markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("أدخل وصفاً للسلسلة (اختياري):", reply_markup=markup)
         return ADD_SERIES_DESC
 
 async def receive_series_category_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -889,7 +886,9 @@ async def receive_series_category_text(update: Update, context: ContextTypes.DEF
     else:
         context.user_data['series_category'] = category
     
-    await update.message.reply_text("أدخل وصف السلسلة (أو اكتب 'لا' للتخطي):", reply_markup=get_cancel_keyboard())
+    keyboard = [[InlineKeyboardButton("⏭️ تخطي (بدون وصف)", callback_data="skip_ser_desc")]]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("أدخل وصفاً للسلسلة (اختياري):", reply_markup=markup)
     return ADD_SERIES_DESC
 
 async def receive_series_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -955,12 +954,37 @@ async def receive_item_number(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receive_item_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['item_title'] = update.message.text
-    await update.message.reply_text("أدخل وصف المادة:")
+    keyboard = [[InlineKeyboardButton("⏭️ تخطي (بدون وصف)", callback_data="skip_item_desc")]]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("أدخل وصف المادة (اختياري):", reply_markup=markup)
     return SERIES_ITEM_DESC
 
 async def receive_item_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['item_description'] = update.message.text
     await update.message.reply_text("قم برفع الملف أو أرسل الرابط:")
+    return SERIES_ITEM_VALUE
+
+async def skip_ser_description_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    name = context.user_data['series_name']
+    category = context.user_data.get('series_category')
+    
+    if db.add_series(name, None, category):
+        category_text = f" في القسم '{category}'" if category else ""
+        await query.edit_message_text(f"تم إضافة سلسلة '{name}'{category_text} بنجاح (بدون وصف).")
+    else:
+        await query.edit_message_text(f"فشل إضافة السلسلة. ربما الاسم موجود بالفعل.")
+    
+    await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+    return ConversationHandler.END
+
+async def skip_item_description_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['item_description'] = ""
+    await query.edit_message_text("تم تخطي الوصف. قم برفع الملف أو أرسل الرابط:")
     return SERIES_ITEM_VALUE
 
 async def receive_item_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
