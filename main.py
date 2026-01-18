@@ -64,7 +64,10 @@ def main():
         entry_points=[CommandHandler("addcategory", handlers.add_category_start)],
         states={
             handlers.NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_new_category_name)],
-            handlers.NEW_CATEGORY_PARENT: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_new_category_parent)],
+            handlers.NEW_CATEGORY_PARENT: [
+                CallbackQueryHandler(handlers.receive_new_category_parent_callback, pattern="^ac_(nav|sel)_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_new_category_parent)
+            ],
         },
         fallbacks=[
             CommandHandler("cancel", handlers.cancel),

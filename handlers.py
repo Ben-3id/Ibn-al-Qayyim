@@ -587,6 +587,36 @@ async def confirm_delete_resource(update: Update, context: ContextTypes.DEFAULT_
 
 # --- Conversation Handler for Adding Category ---
 
+def get_add_cat_selection_markup(parent_name=None):
+    """Generate markup for hierarchical category selection during category creation."""
+    categories = db.get_categories(parent=parent_name)
+    keyboard = []
+    
+    # Navigation to subcategories
+    for cat in categories:
+        keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"ac_nav_{cat}")])
+    
+    # Action buttons
+    actions = []
+    if parent_name:
+        # Up button
+        parent_info = db.get_category_info(parent_name)
+        up_callback = f"ac_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else "ac_nav_root"
+        actions.append(InlineKeyboardButton("⬅️ رجوع", callback_data=up_callback))
+        # Select current button
+        actions.append(InlineKeyboardButton("✅ اختيار هذا القسم", callback_data=f"ac_sel_{parent_name}"))
+    else:
+        # Root level
+        actions.append(InlineKeyboardButton("⏭️ بدون قسم (رئيسي)", callback_data="ac_sel_none"))
+        
+    if actions:
+        keyboard.append(actions)
+        
+    # Always add a cancel button at the bottom
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+        
+    return InlineKeyboardMarkup(keyboard)
+
 async def add_category_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("غير مصرح.")
@@ -603,15 +633,48 @@ async def receive_new_category_name(update: Update, context: ContextTypes.DEFAUL
 
     context.user_data['new_cat_name'] = name
     
-    # Show existing categories to pick as parent
-    categories = db.get_categories(parent=None)
-    
-    text = f"أدخل اسم القسم الأصلي (Parent) للقسم '{name}' (أو اكتب 'None' ليكون قسماً رئيسياً).\n"
-    if categories:
-        text += "الأقسام الرئيسية الحالية: " + ", ".join(categories)
-        
-    await update.message.reply_text(text)
+    # Show hierarchical selection from root
+    markup = get_add_cat_selection_markup(None)
+    await update.message.reply_text(f"اختر القسم الأصلي (Parent) للقسم '{name}':", reply_markup=markup)
     return NEW_CATEGORY_PARENT
+
+async def receive_new_category_parent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("ac_nav_"):
+        # Navigation
+        category_name = data.replace("ac_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = f"اختر القسم الأصلي (Parent) للقسم '{context.user_data['new_cat_name']}':"
+        else:
+            text = f"القسم الحالي: {category_name}\nيمكنك وضع القسم الجديد هنا أو الدخول لقسم فرعي:"
+            
+        markup = get_add_cat_selection_markup(category_name)
+        await query.edit_message_text(text, reply_markup=markup)
+        return NEW_CATEGORY_PARENT
+        
+    elif data.startswith("ac_sel_"):
+        # Selection
+        parent_data = data.replace("ac_sel_", "")
+        if parent_data == "none":
+            parent = None
+        else:
+            parent = parent_data
+            
+        name = context.user_data['new_cat_name']
+        
+        if db.add_category(name, parent):
+            parent_text = f" داخل '{parent}'" if parent else " (قسم رئيسي)"
+            await query.edit_message_text(f"تم إضافة القسم '{name}'{parent_text}.")
+            await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+        else:
+            await query.edit_message_text("فشل إضافة القسم.")
+            await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
+        return ConversationHandler.END
 
 async def receive_new_category_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parent = update.message.text
