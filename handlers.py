@@ -12,6 +12,7 @@ EDIT_HELP_TEXT = 0
 ADD_SERIES_NAME, ADD_SERIES_CATEGORY, ADD_SERIES_DESC = range(3)
 SERIES_ITEM_SERIES, SERIES_ITEM_NUMBER, SERIES_ITEM_TITLE, SERIES_ITEM_DESC, SERIES_ITEM_VALUE = range(5)
 MOVE_TYPE, MOVE_ITEM_SELECT, MOVE_TARGET_CAT = range(3)
+RENAME_TYPE, RENAME_ITEM_SELECT, RENAME_NEW_NAME = range(3)
 
 
 # Admin check decorator or helper
@@ -96,6 +97,57 @@ def get_move_find_markup(move_type, parent_name=None):
         
     return InlineKeyboardMarkup(keyboard)
 
+def get_rename_find_markup(rename_type, parent_name=None):
+    """Generate markup for finding the item to rename hierarchical."""
+    categories = db.get_categories(parent=parent_name)
+    keyboard = []
+    
+    # Categories / Folders
+    for cat in categories:
+        row = [InlineKeyboardButton(f"📁 {cat}", callback_data=f"rfind_nav_{cat}")]
+        if rename_type == 'cat':
+             row.append(InlineKeyboardButton("✏️ اختر للتعديل", callback_data=f"rfind_sel_{cat}"))
+        keyboard.append(row)
+    
+    # Items
+    if rename_type == 'res':
+        resources = db.get_resources_by_category(parent_name)
+        for res in resources:
+            keyboard.append([InlineKeyboardButton(f"📄 {res['title']} (تعديل)", callback_data=f"rfind_sel_{res['title']}")])
+    elif rename_type == 'ser' or rename_type == 'sitem':
+        series_list = db.get_series_by_category(parent_name)
+        for ser in series_list:
+            if rename_type == 'ser':
+                keyboard.append([InlineKeyboardButton(f"📚 {ser['name']} (تعديل)", callback_data=f"rfind_sel_{ser['name']}")])
+            else:
+                keyboard.append([InlineKeyboardButton(f"📚 {ser['name']} (ادخل السلسلة)", callback_data=f"rfind_pickser_{ser['name']}")])
+            
+    # Action buttons
+    actions = []
+    if parent_name:
+        parent_info = db.get_category_info(parent_name)
+        up_callback = f"rfind_nav_{parent_info['parent_name']}" if parent_info and parent_info['parent_name'] else "rfind_nav_root"
+        actions.append(InlineKeyboardButton("⬅️ رجوع", callback_data=up_callback))
+        
+    if actions:
+        keyboard.append(actions)
+        
+    # Always add a cancel button at the bottom
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+        
+    return InlineKeyboardMarkup(keyboard)
+
+def get_series_item_rename_markup(series_name):
+    """List items in a series for renaming."""
+    items = db.get_series_items(series_name)
+    keyboard = []
+    for item in items:
+        keyboard.append([InlineKeyboardButton(f"#{item['item_number']} {item['title']}", callback_data=f"rfind_selsitem_{item['item_number']}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data=f"rename_type_sitem")])
+    keyboard.append([InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")])
+    return InlineKeyboardMarkup(keyboard)
+
 def is_valid_category_name(name: str):
     # Check if it looks like a command, is exactly 'command', or is the cancel button
     if name.startswith('/') or name.lower() == 'command' or name == "❌ إلغاء":
@@ -115,6 +167,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/addlink - إضافة رابط\n"
             "/addfile - إضافة ملف/وسائط\n"
             "/move - نقل (قسم/سلسلة/مادة)\n"
+            "/rename - تعديل اسم (قسم/سلسلة/مادة)\n"
             "/delete - حذف محتوى\n"
             "أوامر الاقسام\n"
             "/addcategory - إضافة قسم\n"
@@ -1061,3 +1114,103 @@ async def receive_move_target_cat_callback(update: Update, context: ContextTypes
             await query.message.reply_text("تم العوده للقائمة الرئيسية.", reply_markup=get_main_menu_keyboard())
             
         return ConversationHandler.END
+
+# --- Admin: Rename Content ---
+
+async def rename_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("غير مصرح.")
+        return ConversationHandler.END
+    
+    keyboard = [
+        [InlineKeyboardButton("📁 قسم (Category)", callback_data="rename_type_cat")],
+        [InlineKeyboardButton("📚 سلسلة (Series)", callback_data="rename_type_ser")],
+        [InlineKeyboardButton("📄 مادة (Resource)", callback_data="rename_type_res")],
+        [InlineKeyboardButton("🔢 مادة داخل سلسلة (Series Item)", callback_data="rename_type_sitem")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_conv")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("ماذا تريد أن تعدل اسمه؟", reply_markup=markup)
+    return RENAME_TYPE
+
+async def receive_rename_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    rtype = query.data.replace("rename_type_", "")
+    context.user_data['rename_type'] = rtype
+    
+    markup = get_rename_find_markup(rtype, None)
+    await query.edit_message_text("تصفح الاقسام لاختيار العنصر الذي تريد تعديل اسمه:", reply_markup=markup)
+    return RENAME_ITEM_SELECT
+
+async def receive_rename_item_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    rtype = context.user_data['rename_type']
+    
+    if data.startswith("rfind_nav_"):
+        # Navigation
+        category_name = data.replace("rfind_nav_", "")
+        if category_name == "root":
+            category_name = None
+            text = "تصفح الاقسام لاختيار العنصر:"
+        else:
+            text = f"القسم الحالي: {category_name}\nاختر العنصر المراد تعديله أو ادخل لقسم فرعي:"
+            
+        markup = get_rename_find_markup(rtype, category_name)
+        await query.edit_message_text(text, reply_markup=markup)
+        return RENAME_ITEM_SELECT
+        
+    elif data.startswith("rfind_pickser_"):
+        # Picking a series to see its items
+        series_name = data.replace("rfind_pickser_", "")
+        context.user_data['rename_series_name'] = series_name
+        markup = get_series_item_rename_markup(series_name)
+        await query.edit_message_text(f"السلسلة: {series_name}\nاختر المادة المراد تعديل اسمها:", reply_markup=markup)
+        return RENAME_ITEM_SELECT
+
+    elif data.startswith("rfind_selsitem_"):
+        # Selection of series item
+        item_number = data.replace("rfind_selsitem_", "")
+        context.user_data['rename_item_number'] = item_number
+        await query.edit_message_text(f"أرسل الاسم الجديد للمادة رقم {item_number}:")
+        return RENAME_NEW_NAME
+
+    elif data.startswith("rfind_sel_"):
+        # Selection
+        item_name = data.replace("rfind_sel_", "")
+        context.user_data['rename_old_name'] = item_name
+        await query.edit_message_text(f"أرسل الاسم الجديد لـ '{item_name}':")
+        return RENAME_NEW_NAME
+
+async def receive_rename_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_name = update.message.text
+    rtype = context.user_data['rename_type']
+    
+    success = False
+    old_name = context.user_data.get('rename_old_name')
+    
+    if rtype == 'cat':
+        if not is_valid_category_name(new_name):
+             await update.message.reply_text("اسم القسم غير صالح.")
+             return RENAME_NEW_NAME
+        success = db.rename_category(old_name, new_name)
+    elif rtype == 'ser':
+        success = db.rename_series(old_name, new_name)
+    elif rtype == 'res':
+        success = db.rename_resource(old_name, new_name)
+    elif rtype == 'sitem':
+        series_name = context.user_data['rename_series_name']
+        item_number = int(context.user_data['rename_item_number'])
+        success = db.rename_series_item(series_name, item_number, new_name)
+        old_name = f"المادة رقم {item_number} في سلسلة {series_name}"
+
+    if success:
+        await update.message.reply_text(f"تم تعديل الاسم بنجاح إلى: {new_name}", reply_markup=get_main_menu_keyboard())
+    else:
+        await update.message.reply_text("فشل تعديل الاسم. ربما الاسم الجديد موجود بالفعل.", reply_markup=get_main_menu_keyboard())
+        
+    return ConversationHandler.END

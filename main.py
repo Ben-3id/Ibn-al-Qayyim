@@ -136,6 +136,21 @@ def main():
         ]
     )
 
+    # Conversation Handler for Rename Content
+    rename_conv = ConversationHandler(
+        entry_points=[CommandHandler("rename", handlers.rename_start)],
+        states={
+            handlers.RENAME_TYPE: [CallbackQueryHandler(handlers.receive_rename_type, pattern="^rename_type_")],
+            handlers.RENAME_ITEM_SELECT: [CallbackQueryHandler(handlers.receive_rename_item_select, pattern="^rfind_(nav|sel|pickser|selsitem)_")],
+            handlers.RENAME_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_rename_new_name)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("help", handlers.help_command))
     app.add_handler(CommandHandler("categories", handlers.categories_command))
@@ -152,6 +167,7 @@ def main():
     app.add_handler(add_series_conv)
     app.add_handler(add_to_series_conv)
     app.add_handler(move_conv)
+    app.add_handler(rename_conv)
     
     # Generic Callback Query Handlers
     app.add_handler(CallbackQueryHandler(handlers.category_callback, pattern="^cat_|back_cats"))

@@ -102,6 +102,18 @@ def delete_resource(title):
     conn.close()
     return rows > 0
 
+def add_category(name, parent_name=None):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('INSERT INTO categories (name, parent_name) VALUES (?, ?)', (name, parent_name))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
 def get_categories(parent=None):
     conn = get_connection()
     c = conn.cursor()
@@ -360,3 +372,73 @@ def delete_series_item(series_name, item_number):
     conn.commit()
     conn.close()
     return rows > 0
+
+# --- Renaming Functions ---
+
+def rename_category(old_name, new_name):
+    """Rename a category and update all references."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # 1. Update the category name itself
+        c.execute('UPDATE categories SET name = ? WHERE name = ?', (new_name, old_name))
+        
+        # 2. Update parent_name for subcategories
+        c.execute('UPDATE categories SET parent_name = ? WHERE parent_name = ?', (new_name, old_name))
+        
+        # 3. Update category for resources
+        c.execute('UPDATE resources SET category = ? WHERE category = ?', (new_name, old_name))
+        
+        # 4. Update category for series
+        c.execute('UPDATE series SET category = ? WHERE category = ?', (new_name, old_name))
+        
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False # New name might already exist
+    finally:
+        conn.close()
+
+def rename_series(old_name, new_name):
+    """Rename a series."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('UPDATE series SET name = ? WHERE name = ?', (new_name, old_name))
+        conn.commit()
+        return c.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def rename_resource(old_title, new_title):
+    """Rename a resource."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('UPDATE resources SET title = ? WHERE title = ?', (new_title, old_title))
+        conn.commit()
+        return c.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def rename_series_item(series_name, item_number, new_title):
+    """Rename an item within a series."""
+    series = get_series_by_name(series_name)
+    if not series:
+        return False
+    
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('UPDATE series_items SET title = ? WHERE series_id = ? AND item_number = ?', 
+                  (new_title, series['id'], item_number))
+        conn.commit()
+        return c.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
