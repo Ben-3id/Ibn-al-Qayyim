@@ -12,8 +12,22 @@ def init_db():
     The user should run the provided SQL script in the Supabase dashboard.
     This function remains as a placeholder to avoid breaking main.py.
     """
-    print("Supabase client initialized. Ensure tables are created in the dashboard.")
-    pass
+    try:
+        # Simple health check
+        supabase.table("settings").select("key").limit(1).execute()
+        print("Supabase connection: OK")
+        return True
+    except Exception as e:
+        print(f"Supabase connection: FAILED - {e}")
+        return False
+
+def check_connection():
+    """Returns True if DB is reachable, False otherwise."""
+    try:
+        supabase.table("settings").select("key").limit(1).execute()
+        return True
+    except Exception:
+        return False
 
 # --- Resource Functions ---
 
@@ -71,32 +85,40 @@ def add_category(name, parent_name=None):
         data = {"name": name, "parent_name": parent_name}
         supabase.table("categories").insert(data).execute()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Error adding category '{name}' under '{parent_name}': {e}")
         return False
 
 def get_categories(parent=None):
-    # Get defined categories
-    if parent:
-        resp = supabase.table("categories").select("name").eq("parent_name", parent).execute()
+    # Normalize parent - handle string "None" or empty string from callback data
+    if parent in [None, "None", "", "root"]:
+        parent_val = None
+    else:
+        parent_val = parent
+
+    # 1. Get defined categories from the categories table
+    if parent_val:
+        resp = supabase.table("categories").select("name").eq("parent_name", parent_val).execute()
     else:
         resp = supabase.table("categories").select("name").is_("parent_name", "null").execute()
     
     cats = [row["name"] for row in resp.data]
     
-    # If root, also include categories from resources that aren't in categories table
-    if parent is None:
-        # Note: Supabase doesn't easily support NOT IN with subqueries in a single call,
-        # but we can fetch them separately or rely on categories table existence.
-        # For simplicity and correctness with hierarchy, we'll mostly rely on categories table.
-        # But let's try to match SQLite's UNION if possible.
+    # 2. If at root, also include categories from resources that aren't in categories table (orphans)
+    if parent_val is None:
+        # Fetch all distinct categories used in resources
+        # Supabase doesn't have distinct, so we fetch all categories and unique them in Python
         res_resp = supabase.table("resources").select("category").neq("category", "None").neq("category", "").execute()
         res_cats = set(row["category"] for row in res_resp.data if row["category"])
         
-        for c in res_cats:
-            if c not in cats:
-                # Check if it has a parent in categories
-                p_resp = supabase.table("categories").select("name").eq("name", c).execute()
-                if not p_resp.data:
+        if res_cats:
+            # Check which of these are already in the 'categories' table
+            # We can do this in one query
+            known_cats_resp = supabase.table("categories").select("name").in_("name", list(res_cats)).execute()
+            known_cats = set(row["name"] for row in known_cats_resp.data)
+            
+            for c in res_cats:
+                if c not in known_cats and c not in cats:
                     cats.append(c)
     
     cats.sort()
@@ -251,3 +273,10 @@ def rename_series_item(series_name, item_number, new_title):
         return len(response.data) > 0
     except Exception:
         return False
+
+def get_next_series_item_number(series_id):
+    """Returns the next item number for a given series_id."""
+    response = supabase.table("series_items").select("item_number").eq("series_id", series_id).order("item_number", desc=True).limit(1).execute()
+    if response.data:
+        return response.data[0]["item_number"] + 1
+    return 1

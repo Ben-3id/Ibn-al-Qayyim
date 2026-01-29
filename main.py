@@ -71,7 +71,7 @@ def main():
         states={
             handlers.NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_new_category_name)],
             handlers.NEW_CATEGORY_PARENT: [
-                CallbackQueryHandler(handlers.receive_new_category_parent_callback, pattern="^ac_(nav|sel)_"),
+                CallbackQueryHandler(handlers.receive_new_category_parent_callback, pattern="^ac_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_new_category_parent)
             ],
         },
@@ -166,13 +166,53 @@ def main():
         ]
     )
 
+    # Conversation Handler for Batch Upload
+    batch_conv = ConversationHandler(
+        entry_points=[CommandHandler("batch", handlers.batch_start)],
+        states={
+            handlers.BATCH_SELECT_TYPE: [CallbackQueryHandler(handlers.receive_batch_type_callback, pattern="^batch_type_")],
+            handlers.BATCH_KEYWORD: [
+                CallbackQueryHandler(handlers.receive_batch_selection_callback, pattern="^batch_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_batch_keyword)
+            ],
+            handlers.BATCH_FILES: [
+                MessageHandler(filters.COMMAND & filters.Regex("^/done$"), handlers.batch_done),
+                MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.Regex("^❌ إلغاء$"), handlers.receive_batch_file),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
+    # Conversation Handler for Deletion
+    delete_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("delete", handlers.delete_start),
+            CommandHandler("deletecategory", handlers.delete_start),
+            CommandHandler("deleteseries", handlers.delete_start)
+        ],
+        states={
+            handlers.DELETE_TYPE: [CallbackQueryHandler(handlers.receive_delete_type, pattern="^del_type_")],
+            handlers.DELETE_ITEM_SELECT: [
+                CallbackQueryHandler(handlers.receive_delete_item_select, pattern="^dfind_"),
+                CallbackQueryHandler(handlers.confirm_final_del_callback, pattern="^confirm_final_del_")
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", handlers.cancel),
+            MessageHandler(filters.Regex("^❌ إلغاء$"), handlers.cancel),
+            CallbackQueryHandler(handlers.cancel, pattern="^cancel_conv")
+        ]
+    )
+
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("help", handlers.help_command))
     app.add_handler(CommandHandler("categories", handlers.categories_command))
     app.add_handler(CommandHandler("search", handlers.search_command))
-    app.add_handler(CommandHandler("delete", handlers.delete_command))
-    app.add_handler(CommandHandler("deletecategory", handlers.delete_category_command))
-    app.add_handler(CommandHandler("deleteseries", handlers.delete_series_command))
+    app.add_handler(CommandHandler("dbstatus", handlers.db_status_command))
     
     app.add_handler(add_link_conv)
     app.add_handler(add_file_conv)
@@ -182,16 +222,14 @@ def main():
     app.add_handler(add_to_series_conv)
     app.add_handler(move_conv)
     app.add_handler(rename_conv)
+    app.add_handler(batch_conv)
+    app.add_handler(delete_conv)
     
     # Generic Callback Query Handlers
     app.add_handler(CallbackQueryHandler(handlers.category_callback, pattern="^cat_|back_cats"))
     app.add_handler(CallbackQueryHandler(handlers.resource_callback, pattern="^res_"))
     
-    # Deletion confirmations
-    app.add_handler(CallbackQueryHandler(handlers.confirm_delete_category, pattern="^confirm_del_cat_"))
-    app.add_handler(CallbackQueryHandler(handlers.confirm_delete_resource, pattern="^confirm_del_res_"))
-    app.add_handler(CallbackQueryHandler(handlers.confirm_delete_series, pattern="^confirm_del_ser_"))
-    app.add_handler(CallbackQueryHandler(handlers.cancel_delete, pattern="^cancel_del"))
+    # Deletion is now handled by delete_conv
 
     # Menu Text Handlers
     app.add_handler(MessageHandler(filters.Regex("^🏠 الرئيسيه$"), handlers.start))
